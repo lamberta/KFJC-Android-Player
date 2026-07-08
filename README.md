@@ -10,13 +10,14 @@ Features:
  - Graceful handling audio focus
  - Android Notification integration
  - Volume control
+ - Android Auto support
 
 Test plan
 ---------
 Throw all you can at it:
 
- - Hardware: connect/disconnect headphones, bluetooth sets, etc
- - Devices: different screen sizes, android os versions (>=3.0 Honeycomb)
+ - Hardware: connect/disconnect headphones, bluetooth sets, car, etc
+ - Devices: different screen sizes, android os versions (>=4.4 KitKat)
  - Internet connection: when it drops out, recovery when it returns. Try streaming on your data plan while driving, say.
  - Interaction with other audio apps: make/take calls, play music from other apps, use spoken map directions while streaming
 
@@ -30,6 +31,10 @@ Build
 
 Changelog
 ---------
+
+v13 (July 2026)
+ - Android Auto support
+ - Target sdk33 / compileSdk34 with androidx.media support
 
 v12 (27 Dec 2023)
  - Target sdk33

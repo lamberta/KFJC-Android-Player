@@ -7,10 +7,21 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.BitmapFactory;
 import android.media.AudioManager;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.IBinder;
+import android.support.v4.media.MediaBrowserCompat;
+import android.support.v4.media.MediaDescriptionCompat;
+import android.support.v4.media.MediaMetadataCompat;
+import android.support.v4.media.session.MediaSessionCompat;
+import android.support.v4.media.session.PlaybackStateCompat;
 import android.util.Log;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.media.MediaBrowserServiceCompat;
 
 import com.google.android.exoplayer2.DefaultLoadControl;
 import com.google.android.exoplayer2.DefaultRenderersFactory;
@@ -25,13 +36,22 @@ import com.google.android.exoplayer2.source.TrackGroupArray;
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector;
 import com.google.android.exoplayer2.trackselection.TrackSelectionArray;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.kfjc.android.player.Constants;
+import org.kfjc.android.player.R;
+import org.kfjc.android.player.control.PreferenceControl;
 import org.kfjc.android.player.intent.PlayerControl;
 import org.kfjc.android.player.intent.PlayerState;
 import org.kfjc.android.player.model.KfjcMediaSource;
 import org.kfjc.android.player.util.NotificationUtil;
 
-public class StreamService extends Service {
+/**
+ * Background audio streaming service for KFJC audio playback.
+ * Extends MediaBrowserServiceCompat to support Android Auto and external media clients.
+ */
+public class StreamService extends MediaBrowserServiceCompat {
 
     private static final String TAG = StreamService.class.getSimpleName();
     private static final IntentFilter becomingNoisyIntentFilter =
@@ -47,6 +67,7 @@ public class StreamService extends Service {
     private PlayerState playerState = new PlayerState();
 	private final IBinder liveStreamBinder = new LiveStreamBinder();
     private ExoPlayer player;
+    private MediaSessionCompat mediaSession;
     private boolean becomingNoisyReceiverRegistered = false;
     private NotificationUtil notificationUtil;
 
@@ -74,6 +95,80 @@ public class StreamService extends Service {
         }
     };
 
+    /** Sets up MediaSessionCompat for Android Auto and media controls. */
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        mediaSession = new MediaSessionCompat(this, TAG);
+        setSessionToken(mediaSession.getSessionToken());
+        mediaSession.setActive(true);
+        mediaSession.setCallback(new MediaSessionCompat.Callback() {
+            @Override
+            public void onPlay() {
+                KfjcMediaSource source = PreferenceControl.getStreamPreference();
+                if (source != null) {
+                    StreamService.this.play(source);
+                }
+            }
+
+            @Override
+            public void onPlayFromMediaId(String mediaId, Bundle extras) {
+                KfjcMediaSource targetSource = null;
+                for (KfjcMediaSource s : PreferenceControl.getKfjcMediaSources()) {
+                    if (mediaId != null && mediaId.equals(s.url)) {
+                        targetSource = s;
+                        break;
+                    }
+                }
+                if (targetSource == null) {
+                    targetSource = PreferenceControl.getStreamPreference();
+                }
+                StreamService.this.play(targetSource);
+            }
+
+            @Override
+            public void onPlayFromSearch(String query, Bundle extras) {
+                KfjcMediaSource source = PreferenceControl.getStreamPreference();
+                if (source != null) {
+                    StreamService.this.play(source);
+                }
+            }
+
+            @Override
+            public void onPause() {
+                StreamService.this.pause();
+            }
+
+            @Override
+            public void onStop() {
+                StreamService.this.stop();
+            }
+        });
+    }
+
+    /** Required for Android Auto / external media clients: allows browsing stream hierarchy. */
+    @Nullable
+    @Override
+    public BrowserRoot onGetRoot(@NonNull String clientPackageName, int clientUid, @Nullable Bundle rootHints) {
+        return new BrowserRoot("KFJC_ROOT", null);
+    }
+
+    /** Required for Android Auto / external media clients: returns playable stream items. */
+    @Override
+    public void onLoadChildren(@NonNull String parentId, @NonNull Result<List<MediaBrowserCompat.MediaItem>> result) {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        for (KfjcMediaSource source : PreferenceControl.getKfjcMediaSources()) {
+            MediaDescriptionCompat description = new MediaDescriptionCompat.Builder()
+                    .setMediaId(source.url)
+                    .setTitle(source.name)
+                    .setSubtitle(source.description)
+                    .setIconBitmap(BitmapFactory.decodeResource(getResources(), R.drawable.ic_launcher))
+                    .build();
+            items.add(new MediaBrowserCompat.MediaItem(description, MediaBrowserCompat.MediaItem.FLAG_PLAYABLE));
+        }
+        result.sendResult(items);
+    }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         notificationUtil = new NotificationUtil(this);
@@ -96,8 +191,12 @@ public class StreamService extends Service {
         return super.onStartCommand(intent, flags, startId);
     }
 
+    /** Routes MediaBrowserService intent to super for Android Auto; uses liveStreamBinder for app UI. */
     @Override
 	public IBinder onBind(Intent intent) {
+        if (SERVICE_INTERFACE.equals(intent.getAction())) {
+            return super.onBind(intent);
+        }
         return liveStreamBinder;
 	}
 
@@ -113,6 +212,10 @@ public class StreamService extends Service {
         if (player != null) {
             player.stop();
             player.release();
+        }
+        if (mediaSession != null) {
+            mediaSession.release();
+            mediaSession = null;
         }
     }
 
@@ -131,6 +234,10 @@ public class StreamService extends Service {
     private void play(KfjcMediaSource mediaSource) {
         this.mediaSource = mediaSource;
         stop();
+        if (mediaSession != null) {
+            mediaSession.setActive(true);
+        }
+        updateMediaSessionState(PlaybackStateCompat.STATE_BUFFERING);
         if (mediaSource.type == KfjcMediaSource.Type.LIVESTREAM) {
             Notification n = notificationUtil.kfjcStreamNotification(
                     getApplicationContext(),
@@ -179,6 +286,7 @@ public class StreamService extends Service {
         }
         player.setPlayWhenReady(false);
         abandonAudioFocus();
+        updateMediaSessionState(PlaybackStateCompat.STATE_PAUSED);
         NotificationManager notificationManager =
                 (NotificationManager) getSystemService(Service.NOTIFICATION_SERVICE);
         Notification n = NotificationUtil.kfjcStreamNotification(
@@ -230,6 +338,10 @@ public class StreamService extends Service {
             player = null;
             playerState.send(getApplicationContext(), PlayerState.State.STOP, mediaSource);
         }
+        updateMediaSessionState(PlaybackStateCompat.STATE_STOPPED);
+        if (mediaSession != null) {
+            mediaSession.setActive(false);
+        }
         unregisterReceivers();
         becomingNoisyReceiverRegistered = false;
         stopForeground(true);
@@ -256,16 +368,20 @@ public class StreamService extends Service {
                 case Player.STATE_READY:
                     if (playWhenReady) {
                         playerState.send(getApplicationContext(), PlayerState.State.PLAY, mediaSource);
+                        updateMediaSessionState(PlaybackStateCompat.STATE_PLAYING);
                         registerReceiver(onAudioBecomingNoisyReceiver, becomingNoisyIntentFilter);
                     } else {
                         playerState.send(getApplicationContext(), PlayerState.State.PAUSE, mediaSource);
+                        updateMediaSessionState(PlaybackStateCompat.STATE_PAUSED);
                     }
                     break;
                 case Player.STATE_BUFFERING:
                     playerState.send(getApplicationContext(), PlayerState.State.BUFFER, mediaSource);
+                    updateMediaSessionState(PlaybackStateCompat.STATE_BUFFERING);
                     break;
                 case Player.STATE_ENDED:
                     playerState.send(getApplicationContext(), PlayerState.State.STOP, mediaSource);
+                    updateMediaSessionState(PlaybackStateCompat.STATE_STOPPED);
                     unregisterReceivers();
                     stop(true);
                     break;
@@ -298,6 +414,7 @@ public class StreamService extends Service {
         public void onPlayerError(ExoPlaybackException error) {
             Log.e(TAG, "ExoPlaybackException: " + error.getMessage());
             playerState.send(getApplicationContext(), PlayerState.State.ERROR, error.getMessage());
+            updateMediaSessionState(PlaybackStateCompat.STATE_ERROR);
         }
 
         @Override
@@ -317,6 +434,31 @@ public class StreamService extends Service {
             exoEventListener.onPlayerStateChanged(
                     player.getPlayWhenReady(), player.getPlaybackState());
         }
+    }
+
+    /** Syncs ExoPlayer state and metadata (Title, Artist, Album Art) with MediaSessionCompat. */
+    private void updateMediaSessionState(int state) {
+        if (mediaSession == null) {
+            return;
+        }
+        long actions = PlaybackStateCompat.ACTION_PLAY |
+                PlaybackStateCompat.ACTION_PAUSE |
+                PlaybackStateCompat.ACTION_STOP |
+                PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID |
+                PlaybackStateCompat.ACTION_PLAY_FROM_SEARCH;
+        PlaybackStateCompat playbackState = new PlaybackStateCompat.Builder()
+                .setActions(actions)
+                .setState(state, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1.0f)
+                .build();
+        mediaSession.setPlaybackState(playbackState);
+
+        MediaMetadataCompat.Builder metadataBuilder = new MediaMetadataCompat.Builder()
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, "KFJC 89.7 FM")
+                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, mediaSource != null ? mediaSource.name : "Live Stream")
+                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, "Foothill College Radio")
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART,
+                        BitmapFactory.decodeResource(getResources(), R.drawable.ic_launcher));
+        mediaSession.setMetadata(metadataBuilder.build());
     }
 
     public long getPlayerPosition() {
