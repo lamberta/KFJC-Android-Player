@@ -2,8 +2,12 @@ package org.kfjc.android.player.dialog;
 
 import android.app.Activity;
 import android.app.Dialog;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.DialogInterface;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.database.ContentObserver;
 import android.media.AudioManager;
 import android.os.Bundle;
@@ -12,6 +16,7 @@ import androidx.core.content.ContextCompat;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.view.ContextThemeWrapper;
 import androidx.appcompat.widget.SwitchCompat;
+import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -47,6 +52,8 @@ public class SettingsDialog extends KfjcDialog {
     private StreamUrlPreferenceChangeHandler urlPreferenceChangeHandler;
     private ContextThemeWrapper themeWrapper;
     private HomeScreenInterface home;
+    private BroadcastReceiver volumeChangeReceiver;
+    private ContentObserver settingsContentObserver;
 
     public static SettingsDialog newInstance(boolean onlyVolume) {
         Bundle args = new Bundle();
@@ -110,7 +117,44 @@ public class SettingsDialog extends KfjcDialog {
                 }
             }
         });
+        dialog.setOnKeyListener(new DialogInterface.OnKeyListener() {
+            @Override
+            public boolean onKey(DialogInterface dialogInterface, int keyCode, KeyEvent event) {
+                if (keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
+                    keyCode == KeyEvent.KEYCODE_VOLUME_DOWN ||
+                    keyCode == KeyEvent.KEYCODE_VOLUME_MUTE) {
+                    if (volumeSeekbar != null && audioManager != null) {
+                        volumeSeekbar.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (audioManager != null && volumeSeekbar != null) {
+                                    int currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+                                    volumeSeekbar.setProgress(currentVol);
+                                }
+                            }
+                        }, 50);
+                    }
+                }
+                return false;
+            }
+        });
         return dialog.create();
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        Dialog dialog = getDialog();
+        if (dialog != null && dialog.getWindow() != null) {
+            boolean isAutomotive = getActivity() != null &&
+                    getActivity().getPackageManager().hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE);
+            if (isAutomotive) {
+                int maxWidthPx = (int) (520 * getResources().getDisplayMetrics().density);
+                int screenWidthPx = getResources().getDisplayMetrics().widthPixels;
+                int targetWidthPx = Math.min(maxWidthPx, (int) (screenWidthPx * 0.55f));
+                dialog.getWindow().setLayout(targetWidthPx, ViewGroup.LayoutParams.WRAP_CONTENT);
+            }
+        }
     }
 
     @Override
@@ -158,7 +202,7 @@ public class SettingsDialog extends KfjcDialog {
             }
         });
 
-        ContentObserver mSettingsContentObserver =
+        settingsContentObserver =
                 new ContentObserver(new Handler()) {
                     @Override
                     public void onChange(boolean selfChange) {
@@ -168,7 +212,34 @@ public class SettingsDialog extends KfjcDialog {
                     }
                 };
         getActivity().getContentResolver().registerContentObserver(
-                android.provider.Settings.System.CONTENT_URI, true, mSettingsContentObserver);
+                android.provider.Settings.System.CONTENT_URI, true, settingsContentObserver);
+
+        volumeChangeReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (audioManager != null && volumeSeekbar != null) {
+                    int volumeLevel = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+                    volumeSeekbar.setProgress(volumeLevel);
+                }
+            }
+        };
+        getActivity().registerReceiver(volumeChangeReceiver,
+                new IntentFilter("android.media.VOLUME_CHANGED_ACTION"));
+    }
+
+    @Override
+    public void onStop() {
+        super.onStop();
+        if (settingsContentObserver != null && getActivity() != null) {
+            getActivity().getContentResolver().unregisterContentObserver(settingsContentObserver);
+            settingsContentObserver = null;
+        }
+        if (volumeChangeReceiver != null && getActivity() != null) {
+            try {
+                getActivity().unregisterReceiver(volumeChangeReceiver);
+            } catch (IllegalArgumentException ignored) {}
+            volumeChangeReceiver = null;
+        }
     }
 
     private class StreamAdapter extends ArrayAdapter<KfjcMediaSource> {

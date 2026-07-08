@@ -101,7 +101,9 @@ public class StreamService extends MediaBrowserServiceCompat {
         super.onCreate();
         mediaSession = new MediaSessionCompat(this, TAG);
         setSessionToken(mediaSession.getSessionToken());
+        mediaSession.setPlaybackToLocal(AudioManager.STREAM_MUSIC);
         mediaSession.setActive(true);
+        updateMediaSessionState(PlaybackStateCompat.STATE_STOPPED);
         mediaSession.setCallback(new MediaSessionCompat.Callback() {
             @Override
             public void onPlay() {

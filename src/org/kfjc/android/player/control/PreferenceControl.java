@@ -2,6 +2,7 @@ package org.kfjc.android.player.control;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.os.AsyncTask;
 
 import com.google.common.collect.ImmutableList;
@@ -14,6 +15,7 @@ import java.util.List;
 import java.util.concurrent.ExecutionException;
 
 public class PreferenceControl {
+
 
 	private static final String PREFERENCE_KEY = "kfjc.preferences";
 	private static final String STREAM_URL_PREFERENCE_KEY = "kfjc.preferences.streamUrl";
@@ -89,7 +91,15 @@ public class PreferenceControl {
 				return s;
 			}
 		}
-		// Try first loaded stream
+		// If running in Automotive OS and no preference selected yet, default to Modest (128k MP3)
+		if (app != null && app.getPackageManager().hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE)) {
+			for (KfjcMediaSource s : kfjcMediaSources) {
+				if (s.format == KfjcMediaSource.Format.MP3 || "Modest".equalsIgnoreCase(s.name)) {
+					return s;
+				}
+			}
+		}
+		// Try first loaded stream ("Best")
 		if (kfjcMediaSources.size() > 0) {
 			return kfjcMediaSources.get(0);
 		}

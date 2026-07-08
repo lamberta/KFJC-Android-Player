@@ -28,7 +28,6 @@
             android:name="org.kfjc.android.player.activity.HomeScreenDrawerActivity"
             android:theme="@style/KfjcCompat"
             android:launchMode="singleTop"
-            android:screenOrientation="portrait"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
